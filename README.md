@@ -43,3 +43,21 @@ res0: Double = 0.49907435051894633
 scala> td.cdfInverse(0.5)
 res1: Double = 0.0022612631398306604
 ```
+
+### Algebird Monoids with TDigest
+``` scala
+scala> import org.isarnproject.sketchesAlgebirdAPI.implicits._
+import org.isarnproject.sketchesAlgebirdAPI.implicits._
+
+scala> val data = Vector.fill(100) { Vector.fill(10000) { scala.util.Random.nextGaussian() } }
+data: scala.collection.immutable.Vector[scala.collection.immutable.Vector[Double]] = Vector(Vector(0.1778102040514962, ...
+
+scala> val tdvec = data.map(TDigest.sketch(_))
+tdvec: scala.collection.immutable.Vector[org.isarnproject.sketches.TDigest] = Vector(TDigest(0.5,75,TDigestMap(-4.215406387806561 -> (1.0, 1.0), ...
+
+scala> val tdsum = com.twitter.algebird.Monoid.sum(tdvec)
+tdsum: org.isarnproject.sketches.TDigest = TDigest(0.5,113,TDigestMap(-4.776867999224537 -> (1.0, 1.0), ...
+
+scala> tdsum.cdf(0)
+res5: Double = 0.46485982756854377
+```
