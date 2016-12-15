@@ -1,5 +1,5 @@
 # isarn-sketches-algebird-api
-Type-classes to interface isarn-sketches with Algebird
+Type-classes to interface [isarn-sketches](https://github.com/isarn/isarn-sketches) with [Algebird](https://twitter.github.io/algebird/)
 
 ### API documentation
 https://isarn.github.io/isarn-sketches-algebird-api/latest/api/
