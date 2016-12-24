@@ -70,6 +70,8 @@ object experiment {
 
   import org.apache.commons.math3.distribution._
 
+  import org.isarnproject.sketches.tdmap.TDigestMap
+
   def combine(ltd: TDigest, rtd: TDigest, delta: Double = TDigest.deltaDefault): TDigest = {
     if (ltd.nclusters <= 1 && rtd.nclusters > 1) combine(rtd, ltd, delta)
     else if (rtd.nclusters == 0) ltd
@@ -91,6 +93,49 @@ object experiment {
       def plus(x: TDigest, y: TDigest): TDigest = combine(x, y, x.delta)
     }
 
+  def q2k(q: Double) = 0.5 + math.asin(2.0 * math.min(1.0, q) - 1.0) / math.Pi
+
+  def combineMerge(ltd: TDigest, rtd: TDigest, delta: Double = TDigest.deltaDefault): TDigest = {
+    if (ltd.nclusters <= 1 && rtd.nclusters > 1) combine(rtd, ltd, delta)
+    else if (rtd.nclusters == 0) ltd
+    else if (rtd.nclusters == 1) {
+      // handle the singleton RHS case specially to prevent quadratic catastrophe when
+      // it is being used in the Aggregator use case
+      val d = rtd.clusters.asInstanceOf[org.isarnproject.sketches.tdmap.tree.INodeTD].data
+      ltd + ((d.key, d.value))
+    } else {
+      // combine using Ted Dunning's latest merge-based algorithm
+      // sort clusters by their centroids, merge any clusters with same center
+      val clust = (ltd.clusters.toVector ++ rtd.clusters.toVector)
+        .sortWith((a, b) => a._1 < b._1)
+        .foldLeft(Vector.empty[(Double, Double)]) { case (v, (x, w)) =>
+          if (v.length > 0 && x == v.last._1) v.dropRight(1) :+ (x, v.last._2 + w)
+          else v :+ (x, w)
+        }
+      val R = TDigest.K / delta
+      val z = clust.iterator.map { case (_, w) => w }.sum
+      var q = 0.0
+      var (xc, wc) = clust.head
+      val merged = scala.collection.mutable.ArrayBuffer.empty[(Double, Double)]
+      for ((x, w) <- clust.tail) {
+        val dq = (wc + w) / z
+        val kTest = R * (q2k(q + dq) - q2k(q))
+        if (kTest > 1.0) {
+          merged += ((xc, wc))
+          q += wc / z
+          xc = x
+          wc = w
+        } else {
+          xc += w * (x - xc) / (wc + w)
+          wc += w
+        }
+      }
+      merged += ((xc, wc))
+      val tdMap = merged.foldLeft(TDigestMap.empty) { case (m, e) => m + e }
+      TDigest(delta, tdMap.size, tdMap)
+    }
+  }
+
   // Kolmogorov-Smirnov D statistic
   def ksD(td: TDigest, dist: RealDistribution): Double = {
     val xmin = td.clusters.keyMin.get
@@ -110,21 +155,24 @@ object experiment {
       val data = Vector.fill(1 + nsums) { Vector.fill(dataSize) { dist.sample } }
       // monoidal addition as defined in the original paper
       val ref = data.map(TDigest.sketch(_)).scanLeft(TDigest.empty())(TDigest.combine(_, _)).drop(1).map(ksD(_, dist))
+      // addition using newer merge-based algorithm
+      val ref2 = data.map(TDigest.sketch(_)).scanLeft(TDigest.empty())(combineMerge(_, _)).drop(1).map(ksD(_, dist))
       // experimental definition where clusters are inserted from largest to smallest
       val exp = data.map(TDigest.sketch(_)).scanLeft(TDigest.empty())(combine(_, _)).drop(1).map(ksD(_, dist))
-      (ref, exp)
+      (ref, exp, ref2)
     }
     val step = math.max(1, nsums / sumSample)
     val jvals = 0 to nsums by step
     val ref = jvals.flatMap(j => raw.map(_._1(j)))
+    val ref2 = jvals.flatMap(j => raw.map(_._3(j)))
     val exp = jvals.flatMap(j => raw.map(_._2(j)))
     val jvf = jvals.flatMap(j => Vector.fill(sampleSize)(j))
-    (ref, exp, jvf)
+    (ref, ref2, exp, jvf)
   }
 
-  def writeJSON(data: Seq[(Seq[Double], Seq[Double], Seq[Int])], fname: String) {
-    val json = data.map { case (ref, exp, jv) =>
-      ("ref" -> ref) ~ ("exp" -> exp) ~ ("jv" -> jv)
+  def writeJSON(data: Seq[(Seq[Double], Seq[Double], Seq[Double], Seq[Int])], fname: String) {
+    val json = data.map { case (ref, ref2, exp, jv) =>
+      ("ref" -> ref) ~ ("ref2" -> ref2) ~ ("exp" -> exp) ~ ("jv" -> jv)
     }
     val out = new PrintWriter(new File(fname))
     out.println(pretty(render(json)))
